@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <title>Sound Scroll</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+
+    <h1>Scrolling Sound</h1>
+    <div style="display:flex; flex-direction: row;">
+      <div style="width: 150px">
+        <span>Playback Rate: </span><span id="playbackRate"></span><span>1.0</span>
+      </div>
+      <div class="slidecontainer" id="slider-outer">
+        <input type="range" min="50" max="200" value="100" class="slider" id="slider">
+      </div>
+    </div>
+    <!-- <button id="play">Play / Pause</button> -->
+
+    <br>
+    <audio id="audio" src="song.mp3"></audio>
+    <button data-playing="false" role="switch" aria-checked="false" id="play">
+      <span>Play/Pause</span>
+    </button>
+
+    <button data-playing="false" role="switch" aria-checked="false" id="reverse">
+      <span>Reverse</span>
+    </button>
+
+    <script src="script.js"></script>
+  </body>
+</html>
