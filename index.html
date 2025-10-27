@@ -8,26 +8,43 @@
   <body>
 
     <h1>Scrolling Sound</h1>
-    <div style="display:flex; flex-direction: row;">
-      <div style="width: 150px">
-        <span>Playback Rate: </span><span id="playbackRate"></span><span>1.0</span>
+
+    <div class="control-group">
+      <button id="play">Play / Pause</button>
+    </div>
+
+    <div class="control-group">
+      <label>Position:</label>
+      <input type="range" min="0" max="100" value="50" class="slider" id="position">
+      <span id="timeDisplay">0:00 / 0:00</span>
+    </div>
+
+    <div class="control-group">
+      <label>Speed (-2x → 2x):</label>
+      <input type="range" min="-200" max="200" value="100" class="slider" id="speed">
+      <span id="speedVal">1.0x</span>
+    </div>
+
+    <div id="params">
+      <div class="param">
+        <label for="length">Chunk Length (s):</label>
+        <input type="number" id="length" value="1.25" step="0.05">
       </div>
-      <div class="slidecontainer" id="slider-outer">
-        <input type="range" min="50" max="200" value="100" class="slider" id="slider">
+      <div class="param">
+        <label for="step">Step (s):</label>
+        <input type="number" id="step" value="1.0" step="0.05" readonly>
+      </div>
+      <div class="param">
+        <label for="period">Period (s):</label>
+        <input type="number" id="period" value="1.0" step="0.01" readonly>
+      </div>
+      <div class="param">
+        <label for="fade">Fade (s):</label>
+        <input type="number" id="fade" value="0.25" step="0.05">
       </div>
     </div>
-    <!-- <button id="play">Play / Pause</button> -->
 
-    <br>
-    <audio id="audio" src="song.mp3"></audio>
-    <button data-playing="false" role="switch" aria-checked="false" id="play">
-      <span>Play/Pause</span>
-    </button>
-
-    <button data-playing="false" role="switch" aria-checked="false" id="reverse">
-      <span>Reverse</span>
-    </button>
-
+    <audio id="audio" src="audio.mp3" crossorigin="anonymous"></audio>
     <script src="script.js"></script>
   </body>
 </html>
