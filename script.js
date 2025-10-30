@@ -21,7 +21,7 @@ function computePeriod(segmentDuration, speed, overlapSec = 0) {
   return effectiveLength / Math.max(Math.abs(speed), 1e-6);
 }
 
-// update the inputs to reflect the actual runtime values
+// update the inputs to reflect input param values
 function updateParamInputs(options = {}) {
   const uiChunk = parseFloat(lengthInput.value) || 1.25;
   const uiStep = parseFloat(stepInput.value);
@@ -61,7 +61,6 @@ function updateParamInputs(options = {}) {
   if (resolvedStep != null) {
     stepInput.value = Number(resolvedStep).toFixed(2);
   }
-
   periodInput.value = Number(period).toFixed(2);
   fadeInput.value = Number(fade).toFixed(2);
 }
@@ -70,6 +69,93 @@ let reverseLoopActive = false;
 let intervalId = null;
 let _reverseRunToken = 0;
 let lastReverseOptions = null;
+let isSpeedDragging = false;
+let pendingReverseOptions = null;
+let _speedCommitLock = false;
+let liveSpeed = null;
+
+function getSpeedFromUI() { return (speedSlider && speedSlider.value) ? (speedSlider.value/100) : 1;}
+
+async function handleSpeedCommit() {
+  if (_speedCommitLock) return;
+  _speedCommitLock = true;
+  try {
+    const speed = getSpeedFromUI();
+    speedVal.textContent = speed >= 0 ? `${speed.toFixed(2)}x` : `Reverse ${Math.abs(speed).toFixed(2)}x`;
+
+    await loadBuffer();
+    await ensureCtx();
+
+    const chunkLength = parseFloat(lengthInput.value);
+    const stepSize = parseFloat(stepInput.value);
+    const fadeSec = parseFloat(fadeInput.value);
+
+    if (speed >= 0) {
+      stopReverse();
+      reverseActive = false;
+      audioElement.currentTime = currentCursor;
+      audioElement.playbackRate = Math.max(speed, 0.1);
+      if (!playing) audioElement.play(), playing = true;
+      return;
+    }
+
+    const absSpeed = Math.abs(speed);
+    const computedPeriod = computePeriod(chunkLength, absSpeed, fadeSec);
+    const stepToUse = (!Number.isNaN(stepSize) && stepSize > 0) ? stepSize : computedPeriod;
+
+    const newOptions = {
+      startPosition: currentCursor,
+      segmentDuration: chunkLength,
+      step: stepToUse,
+      period: computedPeriod,
+      overlapSec: fadeSec,
+      speed: absSpeed
+    };
+
+    // If a reverse loop is already running, defer application until next chunk boundary.
+    if (reverseLoopActive) {
+      pendingReverseOptions = newOptions;
+      updateParamInputs(newOptions);
+      return;
+    }
+
+    playing = false;
+    audioElement.pause();
+    stopReverse();
+    lastReverseOptions = Object.assign({}, newOptions);
+    updateParamInputs(lastReverseOptions);
+    reverseActive = true;
+    playReverseChunks(buffer, lastReverseOptions);
+    } finally {
+    _speedCommitLock = false;
+  }
+}
+
+speedSlider.addEventListener("input", () => {
+  const s = getSpeedFromUI();
+  speedVal.textContent = s >= 0 ? `${s.toFixed(2)}x` : `Reverse ${Math.abs(s).toFixed(2)}x`;
+
+  if (reverseLoopActive) {
+    liveSpeed = s;
+    const chunk = parseFloat(lengthInput.value) || 1.25;
+    const fade = parseFloat(fadeInput.value) || 0;
+    const livePeriod = computePeriod(chunk, Math.abs(s), fade);
+    updateParamInputs({ period: livePeriod });
+    return;
+  }
+
+  liveSpeed = null;
+  updateParamInputs();
+  try { audioElement.playbackRate = Math.max(s, 0.1); } catch (e) {}
+});
+
+speedSlider.addEventListener("pointerdown", () => { isSpeedDragging = true; });
+speedSlider.addEventListener("change", () => { handleSpeedCommit().catch(()=>{}); });
+document.addEventListener("pointerup", async () => {
+  if (!isSpeedDragging) return;
+  isSpeedDragging = false;
+  await handleSpeedCommit().catch(()=>{});
+});
 
 // --- AudioContext setup ---
 async function ensureCtx() {
@@ -114,24 +200,20 @@ playBtn.addEventListener("click", async () => {
   // If in reverse mode: toggle pause/resume of the reverse run
   if (reverseActive) {
     if (reverseLoopActive) {
-      // currently running reverse -> pause it
       stopReverse();
       playing = false;
       updateTimeline();
       return;
     } else {
-      // reverse mode set but not running -> resume using last options
       if (!lastReverseOptions) {
-        // fallback: construct sensible options from current UI
         lastReverseOptions = {
           startPosition: currentCursor,
           segmentDuration: parseFloat(lengthInput.value),
-          step: parseFloat(stepInput.value),      // <- use 'step'
+          step: parseFloat(stepInput.value),
           overlapSec: parseFloat(fadeInput.value),
           speed: Math.abs(speedSlider.value / 100) || 1
         };
       }
-      // start reverse WITHOUT awaiting so UI doesn't block
       await ensureCtx();
       reverseActive = true;
       playing = false;
@@ -162,7 +244,6 @@ positionSlider.addEventListener("input", () => {
     stopReverse();
     const speed = speedSlider.value / 100;
     if (speed < 0) {
-      // store options so we can resume later
       lastReverseOptions = {
         startPosition: currentCursor,
         segmentDuration: parseFloat(lengthInput.value),
@@ -177,62 +258,17 @@ positionSlider.addEventListener("input", () => {
   }
 });
 
-// --- Speed slider ---
-speedSlider.addEventListener("input", async () => {
-  const speed = speedSlider.value / 100;
-  speedVal.textContent = speed >= 0 ? `${speed.toFixed(2)}x` : `Reverse ${Math.abs(speed).toFixed(2)}x`;
 
-  await loadBuffer();
-  await ensureCtx();
-
-  const chunkLength = parseFloat(lengthInput.value); // chunk length (segmentDuration)
-  const stepSize = parseFloat(stepInput.value);      // step = how much cursor jumps
-  const fadeSec = parseFloat(fadeInput.value);
-
-  if (speed >= 0) {
-    // Forward playback
-    stopReverse();
-    reverseActive = false;
-    audioElement.currentTime = currentCursor;
-    audioElement.playbackRate = Math.max(speed, 0.1);
-    if (!playing) audioElement.play(), playing = true;
-  } else {
-    // Reverse playback
-    playing = false;
-    audioElement.pause();
-    stopReverse();
-
-    // compute period from formula: speed = length / period  =>  period = length / speed
-    const absSpeed = Math.abs(speed);
-    const computedPeriod = Math.max(chunkLength - fadeSec, 1e-6) / Math.max(absSpeed, 1e-6);
-
-    // step = how much we jump each iteration (use UI step if provided, otherwise default to period)
-    const stepToUse = (!Number.isNaN(stepSize) && stepSize > 0) ? stepSize : computedPeriod;
-
-    // record options so pause/resume keeps same reverse speed/direction
-    lastReverseOptions = {
-      startPosition: currentCursor,
-      segmentDuration: chunkLength, // chunk length
-      step: stepToUse,              // jump amount (seconds)
-      period: computedPeriod,       // how often we schedule (seconds)
-      overlapSec: fadeSec,
-      speed: absSpeed
-    };
-
-    // update displayed inputs to show resolved values
-    updateParamInputs(lastReverseOptions);
-
-    reverseActive = true;
-    // start reverse run without awaiting
-    playReverseChunks(buffer, lastReverseOptions);
-  }
+speedSlider.addEventListener("input", () => {
+  const s = getSpeedFromUI();
+  speedVal.textContent = s >= 0 ? `${s.toFixed(2)}x` : `Reverse ${Math.abs(s).toFixed(2)}x`;
+  updateParamInputs();
 });
 
 stepInput.addEventListener("input", async () => {
   const uiStep = parseFloat(stepInput.value);
   if (Number.isNaN(uiStep) || uiStep <= 0) return;
 
-  // ensure we have lastReverseOptions
   if (!lastReverseOptions) lastReverseOptions = {
     startPosition: currentCursor,
     segmentDuration: parseFloat(lengthInput.value),
@@ -242,13 +278,9 @@ stepInput.addEventListener("input", async () => {
     speed: Math.abs(speedSlider.value / 100) || 1
   };
 
-  // store jump amount (step). Do NOT overwrite period here — period is derived from speed (length/speed)
   lastReverseOptions.step = uiStep;
-
-  // update displayed inputs to show resolved values
   updateParamInputs(lastReverseOptions);
 
-  // if currently in reverse mode, restart the reverse loop with the new step
   if (reverseActive) {
     await loadBuffer();
     await ensureCtx();
@@ -283,28 +315,24 @@ async function playReverseChunks(buffer, options) {
   const masterGain = audioCtx.createGain();
   masterGain.connect(audioCtx.destination);
 
-  const {
-    startPosition = buffer.duration / 2,
-    segmentDuration = 1.25,     // chunk length
-    step: stepOpt = null,       // jump amount (sec)
-    period: periodOpt = null,   // how often to schedule (sec)
+    let {
+    startPosition = buffer.duration/2,
+    segmentDuration = 1.25,
+    step: stepOpt = null,
+    period: periodOpt = null,
     overlapSec = 0.25,
     speed = 1
   } = options || {};
 
-  // period: speed = length / period  =>  period = length / speed
-  const safeSpeed = Math.max(Math.abs(speed), 1e-6);
-  const computedPeriod = Math.max(segmentDuration - (overlapSec || 0), 1e-6) / safeSpeed;
-  // prefer explicit period passed in options; otherwise use computed period
-  const period = (periodOpt != null) ? periodOpt : computedPeriod;
-  // prefer explicit step (jump) passed in options; otherwise default to period
-  const stepJump = (stepOpt != null) ? stepOpt : period;
+  // period: speed = (length - fade) / period  =>  period = (length - fade) / speed
+  let safeSpeed = Math.max(Math.abs(speed), 1e-6);
+  let computedPeriod = Math.max(segmentDuration - (overlapSec || 0), 1e-6) / safeSpeed;
+  let period = (periodOpt != null) ? periodOpt : computedPeriod;
+  let stepJump = (stepOpt != null) ? stepOpt : period;
 
   updateParamInputs({ segmentDuration, period, step: stepJump, overlapSec });
 
   let cursor = startPosition;
-
-  // single progress tracker for currently-scheduled segment
   let currentScheduledTime = null;
   let currentSegmentStart = null;
 
@@ -323,6 +351,19 @@ async function playReverseChunks(buffer, options) {
   const cancelled = () => (myToken !== _reverseRunToken) || !reverseLoopActive;
 
   while (!cancelled() && cursor > 0) {
+    // if user is dragging the slider, apply live speed changes here (affects scheduling rate smoothly)
+    if (liveSpeed != null) {
+      speed = Math.abs(liveSpeed);
+      safeSpeed = Math.max(Math.abs(speed), 1e-6);
+      computedPeriod = Math.max(segmentDuration - (overlapSec || 0), 1e-6) / safeSpeed;
+
+      const explicitPeriod = (lastReverseOptions && lastReverseOptions.period != null) ? lastReverseOptions.period : periodOpt;
+      period = (explicitPeriod != null) ? explicitPeriod : computedPeriod;
+
+      stepJump = (lastReverseOptions && lastReverseOptions.step != null) ? lastReverseOptions.step : period;
+      updateParamInputs({ segmentDuration, period, step: stepJump, overlapSec });
+    }
+
     const segmentStart = Math.max(0, cursor - segmentDuration);
     const actualDuration = cursor - segmentStart;
     if (actualDuration <= 0) {
@@ -349,11 +390,8 @@ async function playReverseChunks(buffer, options) {
     // allow multiple overlapping segments — period = how often we schedule,
     // segmentDuration = chunk length, stepJump = cursor jump
     const maxOverlap = Math.max(0, segmentDuration - period);
-    // use user overlap if provided, otherwise use physical maxOverlap
     const desiredOverlap = (overlapSec != null && overlapSec > 0) ? overlapSec : maxOverlap;
-    // cap total overlap to the actual segment duration
     const overlapApplied = Math.min(desiredOverlap, actualDuration);
-    // split overlap between fade-in and fade-out
     const fadeIn = Math.min(overlapApplied / 2, actualDuration / 2);
     const fadeOut = Math.min(overlapApplied / 2, actualDuration / 2);
 
@@ -381,8 +419,6 @@ async function playReverseChunks(buffer, options) {
     }
 
     activeSources.push({ src, gain });
-
-    // ensure node cleanup when done
     const removeSource = () => {
       const idx = activeSources.findIndex(o => o.src === src);
       if (idx !== -1) activeSources.splice(idx, 1);
@@ -390,30 +426,50 @@ async function playReverseChunks(buffer, options) {
       try { gain.disconnect(); } catch (e) {}
     };
     src.onended = removeSource;
-
     src.start(scheduledTime);
     src.stop(scheduledTime + actualDuration);
 
-    // move cursor by jump amount (step)
     cursor -= stepJump;
-
-    // wait period seconds before scheduling next chunk (or bail early on cancel)
     const waitMs = Math.max(0, (scheduledTime + period - audioCtx.currentTime) * 1000);
     const deadline = Date.now() + waitMs;
-    // poll for cancellation during wait so we can break quickly if needed
     while (!cancelled() && Date.now() < deadline) {
       await sleep(Math.min(40, deadline - Date.now()));
+    }
+
+    if (!cancelled() && pendingReverseOptions) {
+      lastReverseOptions = Object.assign({}, lastReverseOptions || {}, pendingReverseOptions);
+
+      if (lastReverseOptions.segmentDuration != null) segmentDuration = lastReverseOptions.segmentDuration;
+      if (lastReverseOptions.overlapSec != null) overlapSec = lastReverseOptions.overlapSec;
+      if (lastReverseOptions.speed != null) speed = lastReverseOptions.speed;
+
+      safeSpeed = Math.max(Math.abs(speed), 1e-6);
+      computedPeriod = Math.max(segmentDuration - (overlapSec || 0), 1e-6) / safeSpeed;
+      period = (lastReverseOptions.period != null) ? lastReverseOptions.period : computedPeriod;
+      stepJump = (lastReverseOptions.step != null) ? lastReverseOptions.step : period;
+
+      updateParamInputs({ segmentDuration, period, step: stepJump, overlapSec });
+      pendingReverseOptions = null;
+    }
+  }
+  // pause audio if you hit the beginning while reversing
+  if (!cancelled()) {
+    reverseLoopActive = false;
+    playing = false;
+    currentCursor = 0;
+    updateTimeline();
+
+    if (intervalId) {
+      clearInterval(intervalId);
+      intervalId = null;
     }
   }
 }
 
 // --- Stop reverse ---
 function stopReverse() {
-  // cancel any running reverse loop
   _reverseRunToken++;
   reverseLoopActive = false;
-  // keep reverseActive = true so UI knows we're still in reverse mode (just paused)
-  // remember current position so resume continues at same spot/speed
   if (!lastReverseOptions) lastReverseOptions = {};
   lastReverseOptions.startPosition = currentCursor;
 
