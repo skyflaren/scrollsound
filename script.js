@@ -21,14 +21,30 @@ function computePeriod(segmentDuration, speed, overlapSec = 0) {
   return effectiveLength / Math.max(Math.abs(speed), 1e-6);
 }
 
-// update the inputs to reflect input param values
+let userEditingParam = false;
+
+[lengthInput, stepInput, fadeInput, periodInput].forEach(el => {
+  el.addEventListener("focus", () => { userEditingParam = true; });
+  el.addEventListener("blur", () => { userEditingParam = false; });
+});
+
 function updateParamInputs(options = {}) {
+  if (userEditingParam) return;
   const uiChunk = parseFloat(lengthInput.value) || 1.25;
-  const uiStep = parseFloat(stepInput.value);
+  const uiStep = parseFloat(stepInput.value) || 1;
   const uiFade = parseFloat(fadeInput.value) || 0;
   const uiSpeed = (speedSlider && speedSlider.value) ? (speedSlider.value / 100) : 1;
 
   const computedPeriod = computePeriod(uiChunk, uiSpeed, uiFade);
+
+  const isReverse = uiSpeed < 0;
+  const paramInputs = [lengthInput, stepInput, periodInput, fadeInput];
+  for (const input of paramInputs) {
+    input.disabled = !isReverse;
+    input.classList.toggle("disabled-param", !isReverse);
+  }
+
+  if (!isReverse) return;
 
   const segmentDuration = (options.segmentDuration != null)
     ? options.segmentDuration
@@ -46,7 +62,7 @@ function updateParamInputs(options = {}) {
     ? options.step
     : (lastReverseOptions && lastReverseOptions.step) != null
       ? lastReverseOptions.step
-      : null;
+      : uiStep;
 
   const fade = (options.overlapSec != null)
     ? options.overlapSec
@@ -54,16 +70,49 @@ function updateParamInputs(options = {}) {
       ? lastReverseOptions.overlapSec
       : uiFade;
 
-  // write resolved values back into the inputs so they show the "actual" parameters
   lengthInput.value = Number(segmentDuration).toFixed(2);
-
-  // Only overwrite step input if we have an explicit resolved step (from options or lastReverseOptions).
-  if (resolvedStep != null) {
-    stepInput.value = Number(resolvedStep).toFixed(2);
-  }
+  stepInput.value = Number(resolvedStep).toFixed(2);
   periodInput.value = Number(period).toFixed(2);
   fadeInput.value = Number(fade).toFixed(2);
 }
+
+
+const audioFileInput = document.getElementById("audioFile");
+let currentFileURL = null;
+
+audioFileInput.addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  if (currentFileURL) URL.revokeObjectURL(currentFileURL);
+  currentFileURL = URL.createObjectURL(file);
+
+  stopReverse();
+  if (playing) {
+    audioElement.pause();
+    playing = false;
+  }
+
+  audioElement.src = currentFileURL;
+
+  await ensureCtx();
+  const arrayBuffer = await file.arrayBuffer();
+  buffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+  // Reset cursor only on first load
+  if (firstLoad) {
+    currentCursor = buffer.duration / 2;
+    firstLoad = false;  // clear flag after first load
+  }
+
+  updateTimeline();
+  lastReverseOptions = null;
+});
+
+window.addEventListener("DOMContentLoaded", () => {
+  [lengthInput, stepInput, fadeInput, periodInput].forEach(el => { el.disabled = true; });
+  // updateParamInputs();
+});
 
 let reverseLoopActive = false;
 let intervalId = null;
@@ -91,14 +140,21 @@ async function handleSpeedCommit() {
     const fadeSec = parseFloat(fadeInput.value);
 
     if (speed >= 0) {
-      stopReverse();
-      reverseActive = false;
-      audioElement.currentTime = currentCursor;
-      audioElement.playbackRate = Math.max(speed, 0.1);
-      if (!playing) audioElement.play(), playing = true;
+      // --- Forward playback ---
+      if (reverseActive) {
+        stopReverse();
+        reverseActive = false;
+      }
+    // audioElement.currentTime = currentCursor;
+      audioElement.playbackRate = Math.max(speed, 0.01);
+      if (!playing) {
+        audioElement.play();
+        playing = true;
+      }
       return;
     }
 
+    // --- Reverse playback logic stays the same ---
     const absSpeed = Math.abs(speed);
     const computedPeriod = computePeriod(chunkLength, absSpeed, fadeSec);
     const stepToUse = (!Number.isNaN(stepSize) && stepSize > 0) ? stepSize : computedPeriod;
@@ -112,13 +168,13 @@ async function handleSpeedCommit() {
       speed: absSpeed
     };
 
-    // If a reverse loop is already running, defer application until next chunk boundary.
     if (reverseLoopActive) {
       pendingReverseOptions = newOptions;
       updateParamInputs(newOptions);
       return;
     }
 
+    // Stop forward playback before starting reverse
     playing = false;
     audioElement.pause();
     stopReverse();
@@ -126,7 +182,8 @@ async function handleSpeedCommit() {
     updateParamInputs(lastReverseOptions);
     reverseActive = true;
     playReverseChunks(buffer, lastReverseOptions);
-    } finally {
+
+  } finally {
     _speedCommitLock = false;
   }
 }
@@ -258,13 +315,6 @@ positionSlider.addEventListener("input", () => {
   }
 });
 
-
-speedSlider.addEventListener("input", () => {
-  const s = getSpeedFromUI();
-  speedVal.textContent = s >= 0 ? `${s.toFixed(2)}x` : `Reverse ${Math.abs(s).toFixed(2)}x`;
-  updateParamInputs();
-});
-
 stepInput.addEventListener("input", async () => {
   const uiStep = parseFloat(stepInput.value);
   if (Number.isNaN(uiStep) || uiStep <= 0) return;
@@ -296,8 +346,6 @@ stepInput.addEventListener("input", async () => {
 async function playReverseChunks(buffer, options) {
   if (!buffer) return;
   await ensureCtx();
-
-  // cancel any previous run (bump token) and stop previous scheduled sources
   _reverseRunToken++;
   const myToken = _reverseRunToken;
   if (intervalId) { clearInterval(intervalId); intervalId = null; }
@@ -351,7 +399,6 @@ async function playReverseChunks(buffer, options) {
   const cancelled = () => (myToken !== _reverseRunToken) || !reverseLoopActive;
 
   while (!cancelled() && cursor > 0) {
-    // if user is dragging the slider, apply live speed changes here (affects scheduling rate smoothly)
     if (liveSpeed != null) {
       speed = Math.abs(liveSpeed);
       safeSpeed = Math.max(Math.abs(speed), 1e-6);

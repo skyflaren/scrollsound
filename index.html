@@ -10,6 +10,11 @@
     <h1>Scrolling Sound</h1>
 
     <div class="control-group">
+      <label for="audioFile">Upload Audio:</label>
+      <input type="file" id="audioFile" accept="audio/*">
+    </div>
+
+    <div class="control-group">
       <button id="play">Play / Pause</button>
     </div>
 
@@ -20,27 +25,27 @@
     </div>
 
     <div class="control-group">
-      <label>Speed (-2x → 2x):</label>
-      <input type="range" min="-200" max="200" value="100" class="slider" id="speed">
+      <label>Speed (-4x → 4x):</label>
+      <input type="range" min="-400" max="400" value="100" class="slider" id="speed">
       <span id="speedVal">1.0x</span>
     </div>
 
     <div id="params">
       <div class="param">
         <label for="length">Chunk Length (s):</label>
-        <input type="number" id="length" value="1.25" step="0.05">
+        <input type="number" id="length" value="1.25" step="0.05" disabled>
       </div>
       <div class="param">
         <label for="step">Step (s):</label>
-        <input type="number" id="step" value="1.0" step="0.05" readonly>
+        <input type="number" id="step" value="1.0" step="0.05" disabled>
       </div>
       <div class="param">
         <label for="period">Period (s):</label>
-        <input type="number" id="period" value="1.0" step="0.01" readonly>
+        <input type="number" id="period" value="1.0" step="0.01" readonly disabled>
       </div>
       <div class="param">
         <label for="fade">Fade (s):</label>
-        <input type="number" id="fade" value="0.25" step="0.05">
+        <input type="number" id="fade" value="0.25" step="0.05" disabled>
       </div>
     </div>
 

@@ -1,7 +1,7 @@
 body{
   max-width: 800px;
   margin: auto;
-  margin-top: 40%;
+  margin-top: 20%;
   background-color: #eaeaea;
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 
@@ -49,7 +49,8 @@ audio {
   margin-bottom: 10px;
 }
 
-.param input:disabled {
-  background: #ccc;
+input:disabled,
+.disabled-param {
+  opacity: 0.5;
   cursor: not-allowed;
 }
